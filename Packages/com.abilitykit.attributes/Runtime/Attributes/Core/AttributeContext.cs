@@ -19,6 +19,18 @@ namespace AbilityKit.Attributes.Core
         private int _nextSourceId = 1;
 
         /// <summary>
+        /// 每个 Context 一份运行期索引：修饰器反向边和上下文输入订阅。
+        /// 静态闭包在注册表上，冻结后所有 Context 共享。
+        /// </summary>
+        private readonly AttributeInvalidationIndex _invalidation = new AttributeInvalidationIndex();
+
+        private float _level = 1f;
+        private float _elapsedTime;
+
+        private int[] _visitMarks = new int[16];
+        private int _visitStamp = 1;
+
+        /// <summary>
         /// 注册表引用（可注入）
         /// </summary>
         private IAttributeRegistry _registry;
@@ -37,7 +49,19 @@ namespace AbilityKit.Attributes.Core
         /// <summary>
         /// 当前等级（用于 ScalableFloat 曲线插值）
         /// </summary>
-        public float Level { get; set; } = 1f;
+        // [AK-INVALIDATE] 等级只失效订阅了 "level" 的属性，再带上它们的下游。
+        // LevelProbe 使用 LevelCurve(10, {1,1, 3,2})：等级 1 读到 10，等级 3 读到 20。
+        // TimeProbe 不在这张表里，不会变脏。
+        public float Level
+        {
+            get => _level;
+            set
+            {
+                if (Math.Abs(_level - value) < 0.00001f) return;
+                _level = value;
+                InvalidateInput("level");
+            }
+        }
 
         public event Action<string, AttributeId, float, float> AttributeChanged;
 
@@ -50,7 +74,19 @@ namespace AbilityKit.Attributes.Core
         public float DeltaTime { get; set; }
 
         /// <summary>距离修改器生效的已过时间（秒）</summary>
-        public float ElapsedTime { get; set; }
+        // [AK-INVALIDATE] 已过时间只失效订阅了 "elapsedTime" 的属性。
+        // 线性 TimeDecay(80, 4)：ElapsedTime 0 读到 80，改为 2 后读到 40。
+        // CurrentTime 不参与这条公式，不在这里失效。
+        public float ElapsedTime
+        {
+            get => _elapsedTime;
+            set
+            {
+                if (Math.Abs(_elapsedTime - value) < 0.00001f) return;
+                _elapsedTime = value;
+                InvalidateInput("elapsedTime");
+            }
+        }
 
         #endregion
 
@@ -132,6 +168,10 @@ namespace AbilityKit.Attributes.Core
         /// <summary>
         /// 设置浮点数据
         /// </summary>
+        // [AK-INVALIDATE] 按 key 失效持有者及其下游，不再扫描全部修饰器。
+        // Attack 使用 ContextFloat("buffPower")，BonusFromAttack = Attack * 2。
+        // SetFloat("buffPower", 5) 后不读 Attack，BonusFromAttack 下次读取为 10。
+        // 新增日期这类输入时复用 InvalidateInput，不要新增 daySensitive 字段。
         public void SetFloat(string key, float value)
         {
             if (string.IsNullOrEmpty(key)) return;
@@ -140,7 +180,7 @@ namespace AbilityKit.Attributes.Core
             _dataSlots[key] = value;
             if (changed)
             {
-                MarkContextFloatDependentsDirty(key);
+                InvalidateInput(key);
             }
         }
 
@@ -155,7 +195,7 @@ namespace AbilityKit.Attributes.Core
             _dataSlots[key] = value;
             if (changed)
             {
-                MarkContextFloatDependentsDirty(key);
+                InvalidateInput(key);
             }
         }
 
@@ -212,37 +252,154 @@ namespace AbilityKit.Attributes.Core
             var value = new AttributeGroup(group, this);
             value.AttributeChanged += (id, oldV, newV) =>
             {
+                // [AK-INVALIDATE] 不在 AttributeChanged 里标脏。
+                // Changed 只有读取并重算之后才会发生。
+                // 若标脏留在这里，SetBase(Strength, 80) 后不读力量就读 DamageFromAttack，结果会停留在 210。
                 AttributeChanged?.Invoke(group, id, oldV, newV);
-                OnAttributeValueChanged(id);
             };
             _groups[group] = value;
             return value;
         }
 
-        private void OnAttributeValueChanged(AttributeId id)
+        #region 失效
+
+        /// <summary>
+        /// [AK-INVALIDATE] 标记属性和它的全部下游为脏，不立即重算。
+        /// </summary>
+        public void Invalidate(AttributeId id)
         {
-            var reg = Registry;
-            if (reg == null) return;
+            if (!id.IsValid) return;
 
-            var dependents = reg.GetDependents(id);
-            if (dependents == null || dependents.Count == 0) return;
+            int stamp = BeginVisit();
+            Visit(id, stamp);
+        }
 
-            for (int i = 0; i < dependents.Count; i++)
+        /// <summary>
+        /// [AK-INVALIDATE] 标记订阅了指定上下文输入的属性和它们的下游为脏。
+        /// 同一次遍历代号处理全部持有者，公共下游只走一次。
+        /// </summary>
+        public void InvalidateInput(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return;
+            if (!_invalidation.TryGetInputSubscribers(key, out var holders)) return;
+
+            int stamp = BeginVisit();
+            foreach (var holder in holders)
             {
-                var dep = dependents[i];
-                if (!dep.IsValid) continue;
-                var g = GetGroupFor(dep);
-                g?.MarkDirty(dep);
+                Visit(AttributeId.FromRaw(holder.Key), stamp);
             }
         }
 
-        private void MarkContextFloatDependentsDirty(string key)
+        // [AK-INVALIDATE] 只标脏，不重算。
+        // 先标自己和静态闭包，再沿运行期边继续。
+        // 闭包里的节点即使已经访问过，仍要走它的运行期边：
+        // Strength 的闭包含 AttackFromStrength 时，Attack 上的 Attribute(Strength) 边不在闭包数组里。
+        // 已访问的节点直接返回，截断 Strength ↔ Attack 这类运行期环。
+        private void Visit(AttributeId id, int stamp)
         {
-            foreach (var group in _groups.Values)
+            if (!id.IsValid) return;
+
+            int rawId = id.RawId;
+            if (IsVisited(rawId, stamp)) return;
+            MarkVisited(rawId, stamp);
+
+            MarkExistingInstanceDirty(rawId);
+
+            var downstream = Registry.GetDownstream(id);
+            for (int i = 0; i < downstream.Count; i++)
             {
-                group.MarkContextFloatDependentsDirty(key);
+                var child = downstream[i];
+                if (!child.IsValid) continue;
+
+                int childRawId = child.RawId;
+                if (IsVisited(childRawId, stamp)) continue;
+                MarkVisited(childRawId, stamp);
+                MarkExistingInstanceDirty(childRawId);
+            }
+
+            if (_invalidation.TryGetRuntimeHolders(rawId, out var holders))
+            {
+                foreach (var holder in holders)
+                {
+                    Visit(AttributeId.FromRaw(holder.Key), stamp);
+                }
+            }
+
+            for (int i = 0; i < downstream.Count; i++)
+            {
+                var child = downstream[i];
+                if (!child.IsValid) continue;
+
+                int childRawId = child.RawId;
+                if (_invalidation.TryGetRuntimeHolders(childRawId, out var childHolders))
+                {
+                    foreach (var holder in childHolders)
+                    {
+                        Visit(AttributeId.FromRaw(holder.Key), stamp);
+                    }
+                }
             }
         }
+
+        /// <summary>
+        /// 只标已有实例，不创建分组或实例。
+        /// </summary>
+        private void MarkExistingInstanceDirty(int rawId)
+        {
+            var id = AttributeId.FromRaw(rawId);
+            var groupName = Registry.GetGroup(id) ?? string.Empty;
+            if (!_groups.TryGetValue(groupName, out var group) || group == null) return;
+            group.MarkDirty(id);
+        }
+
+        private int BeginVisit()
+        {
+            _visitStamp++;
+            if (_visitStamp >= int.MaxValue)
+            {
+                Array.Clear(_visitMarks, 0, _visitMarks.Length);
+                _visitStamp = 1;
+            }
+
+            return _visitStamp;
+        }
+
+        private bool IsVisited(int rawId, int stamp)
+        {
+            return rawId >= 0 && rawId < _visitMarks.Length && _visitMarks[rawId] == stamp;
+        }
+
+        private void MarkVisited(int rawId, int stamp)
+        {
+            if (rawId < 0) return;
+
+            if (rawId >= _visitMarks.Length)
+            {
+                int newSize = _visitMarks.Length <= 0 ? 4 : _visitMarks.Length;
+                while (newSize <= rawId)
+                {
+                    newSize *= 2;
+                }
+
+                var newMarks = new int[newSize];
+                Array.Copy(_visitMarks, newMarks, _visitMarks.Length);
+                _visitMarks = newMarks;
+            }
+
+            _visitMarks[rawId] = stamp;
+        }
+
+        internal void RegisterModifierDependencies(int holderRawId, in ModifierData modifier)
+        {
+            _invalidation.Register(holderRawId, modifier);
+        }
+
+        internal void UnregisterModifierDependencies(int holderRawId, in ModifierData modifier)
+        {
+            _invalidation.Unregister(holderRawId, modifier);
+        }
+
+        #endregion
 
         /// <summary>
         /// 获取属性所属的组

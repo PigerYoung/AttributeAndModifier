@@ -20,6 +20,12 @@ namespace AttributeAndModifier.Lessons
         public static AttributeId CritChance { get; private set; }
         public static AttributeId AttackFromStrength { get; private set; }
         public static AttributeId HealthFromMaxHealth { get; private set; }
+        public static AttributeId DamageFromAttack { get; private set; }
+        public static AttributeId BonusFromAttack { get; private set; }
+        public static AttributeId LevelProbe { get; private set; }
+        public static AttributeId TimeProbe { get; private set; }
+        public static AttributeId CustomFormulaProbe { get; private set; }
+        public static AttributeId CustomConstraintProbe { get; private set; }
 
         private static bool _initialized;
 
@@ -49,6 +55,40 @@ namespace AttributeAndModifier.Lessons
                 new AttributeExpressionFormula("min(base + add, Lesson.MaxHealth)"),
                 new RangeAttributeConstraint(0f, 10000f),
                 MaxHealth));
+
+            DamageFromAttack = AttrRegistry.Register(new AttributeDef(
+                "Lesson.DamageFromAttack",
+                "Combat",
+                0f,
+                new AttributeExpressionFormula("Lesson.AttackFromStrength * 2"),
+                null,
+                AttackFromStrength));
+
+            BonusFromAttack = AttrRegistry.Register(new AttributeDef(
+                "Lesson.BonusFromAttack",
+                "Combat",
+                0f,
+                new AttributeExpressionFormula("Lesson.Attack * 2"),
+                null,
+                Attack));
+
+            LevelProbe = AttrRegistry.Register(new AttributeDef("Lesson.LevelProbe", "Combat", 0f));
+            TimeProbe = AttrRegistry.Register(new AttributeDef("Lesson.TimeProbe", "Combat", 0f));
+
+            CustomFormulaProbe = AttrRegistry.Register(new AttributeDef(
+                "Lesson.CustomFormulaProbe",
+                "Combat",
+                0f,
+                new CappedByMaxHealthFormula(MaxHealth),
+                null,
+                MaxHealth));
+
+            CustomConstraintProbe = AttrRegistry.Register(new AttributeDef(
+                "Lesson.CustomConstraintProbe",
+                "Combat",
+                0f,
+                null,
+                new SoftCapConstraint(100f, 0.5f)));
 
             _initialized = true;
         }

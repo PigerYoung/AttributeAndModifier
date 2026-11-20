@@ -27,6 +27,13 @@ namespace AbilityKit.Attributes.Core
 
         private readonly Dictionary<int, List<AttributeId>> _dependents = new Dictionary<int, List<AttributeId>>(128);
 
+        /// <summary>
+        /// [AK-INVALIDATE] 冻结后不变的传递闭包，值是全部静态下游，不含自己。
+        /// 例子：Strength 的下游含 AttackFromStrength 和 DamageFromAttack。
+        /// SetBase(Strength, 80) 时两者一起标脏，读取才重算。
+        /// </summary>
+        private readonly Dictionary<int, AttributeId[]> _downstream = new Dictionary<int, AttributeId[]>(128);
+
         private bool _frozen;
 
         /// <summary>
@@ -53,6 +60,17 @@ namespace AbilityKit.Attributes.Core
             if (!id.IsValid) return null;
             if (_dependents.TryGetValue(id.Id, out var list)) return list;
             return null;
+        }
+
+        /// <summary>
+        /// [AK-INVALIDATE] 获取静态传递闭包：全部静态下游，不含自己。
+        /// 未知 id 或没有下游时返回空列表，不返回 null。
+        /// </summary>
+        public IReadOnlyList<AttributeId> GetDownstream(AttributeId id)
+        {
+            if (!id.IsValid) return Array.Empty<AttributeId>();
+            if (_downstream.TryGetValue(id.Id, out var list)) return list;
+            return Array.Empty<AttributeId>();
         }
 
         public IEnumerable<AttributeId> GetDependencies(AttributeId id)
@@ -137,6 +155,56 @@ namespace AbilityKit.Attributes.Core
                         _dependents[from.Id] = list;
                     }
                     list.Add(to);
+                }
+            }
+
+            BuildDownstreamClosure();
+        }
+
+        /// <summary>
+        /// [AK-INVALIDATE] 从直接反向图生成去重的传递闭包。
+        /// 钻石依赖只保留一次，不含自己；静态图在冻结时已拒绝自依赖和环。
+        /// </summary>
+        private void BuildDownstreamClosure()
+        {
+            _downstream.Clear();
+
+            var visited = new bool[_nodes.Count];
+            var stack = new List<int>(16);
+            var result = new List<AttributeId>(16);
+
+            for (int i = 1; i < _nodes.Count; i++)
+            {
+                if (!_dependents.TryGetValue(i, out var direct) || direct.Count == 0) continue;
+
+                Array.Clear(visited, 0, visited.Length);
+                stack.Clear();
+                result.Clear();
+                stack.Add(i);
+
+                while (stack.Count > 0)
+                {
+                    int current = stack[stack.Count - 1];
+                    stack.RemoveAt(stack.Count - 1);
+
+                    if (!_dependents.TryGetValue(current, out var children)) continue;
+                    for (int j = 0; j < children.Count; j++)
+                    {
+                        var child = children[j];
+                        if (!child.IsValid) continue;
+
+                        int childId = child.Id;
+                        if (childId == i || visited[childId]) continue;
+
+                        visited[childId] = true;
+                        result.Add(new AttributeId(childId, _nodes[childId].Name));
+                        stack.Add(childId);
+                    }
+                }
+
+                if (result.Count > 0)
+                {
+                    _downstream[i] = result.ToArray();
                 }
             }
         }

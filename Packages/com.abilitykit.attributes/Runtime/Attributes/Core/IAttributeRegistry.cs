@@ -78,6 +78,13 @@ namespace AbilityKit.Attributes.Core
         IReadOnlyList<AttributeId> GetDependents(AttributeId id);
 
         /// <summary>
+        /// [AK-INVALIDATE] 获取静态传递闭包：全部静态下游，不含自己。
+        /// 例：Strength 的下游含 AttackFromStrength 和 DamageFromAttack。
+        /// 未知 id 或没有下游时返回空列表。
+        /// </summary>
+        IReadOnlyList<AttributeId> GetDownstream(AttributeId id);
+
+        /// <summary>
         /// 获取该属性依赖的其他属性
         /// </summary>
         IEnumerable<AttributeId> GetDependencies(AttributeId id);

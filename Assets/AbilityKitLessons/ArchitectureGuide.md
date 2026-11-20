@@ -87,6 +87,8 @@ var attack = context.GetValue(attackId);
 2. 运行时用稳定 ID 访问，减少字符串比较。
 3. 依赖图和缓存可以用 ID 建立关系。
 
+`RawId` 由注册顺序决定：在中间插入新属性会让后面的 ID 整体后移，因此存档和网络协议不应依赖绝对 ID。注册表冻结后 `Register` 和未注册名称的 `Request` 都会抛异常。课程 12 演示了注册顺序、冻结行为，以及同一套 `AttributeDef` 在多个 `AttributeContext` 上的独立数值。
+
 ## 4. Modifier 是什么
 
 一个 Modifier 不是简单的“加 10”，而是一组完整描述：
@@ -231,6 +233,8 @@ Modifier = Add(Strength × 0.5)
 
 这两种语义必须在设计阶段明确，否则会出现“装备换下后，已经发射的火球伤害也变化”的问题。
 
+课程 14 用同一组数字演示了两条路径：实时路径使用 `MagnitudeSource.Attribute`，力量变化后攻击力继续跟随；快照路径在“命中瞬间”把数值记录到伤害对象里，之后与源属性解耦。如果希望快照也走修改器，可以在捕获时使用 `MagnitudeSource.Fixed(capturedValue)`。
+
 ## 7. 脏标记和缓存
 
 属性值不是每次读取都重新计算。`AttributeInstance` 会保存：
@@ -276,19 +280,27 @@ Health = min(当前计算值, MaxHealth)
 AbilityKit 的做法是：
 
 1. 注册属性定义时声明依赖。
-2. `AttributeRegistry.Freeze()` 时建立依赖图。
+2. `AttributeRegistry.Freeze()` 时建立依赖图，并生成静态传递闭包。
 3. 冻结阶段检查循环依赖。
-4. 源属性变化后，Context 找到所有下游属性并标记 Dirty。
+4. 运行期修饰器引用另外登记反向边。
+5. 等级、已过时间和 `ContextFloat` 按输入键订阅。
+6. 写入时只标脏，下次读取再重算。
+
+例子：
 
 ```text
-MaxHealth 改变
+Strength 10 → 80
     ↓
-Registry 查找 dependents
+静态闭包：AttackFromStrength、DamageFromAttack 一起变脏
     ↓
-Health 标记 Dirty
+只读 DamageFromAttack
     ↓
-下次读取 Health 时重新计算
+DamageFromAttack 读 AttackFromStrength，AttackFromStrength 读 Strength
+    ↓
+210 → 280
 ```
+
+静态闭包只覆盖 `DependsOn` 和公式里的属性。战斗中添加的修饰器（例如 `MagnitudeSource.Attribute(Strength, 0.5)`）在 `AddModifier` 时登记运行期反向边，卸下时按引用计数删除。等级、已过时间和 `ContextFloat` 走输入键订阅：`"level"`、`"elapsedTime"` 以及修饰器自己的 key。
 
 冻结注册表的原因是：战斗开始后属性目录应该稳定。这样可以避免运行中途新增属性导致 ID、依赖图和缓存语义发生变化。
 
@@ -319,6 +331,8 @@ Buff 增加 = 2.0
 ```
 
 把边界逻辑放在 Constraint 中，可以避免每个装备、Buff、技能都重复写 `Clamp`。
+
+课程 13 演示了自定义实现：`CappedByMaxHealthFormula` 在代码里读取 `MaxHealth` 并限制上限，`SoftCapConstraint` 对超过阈值的部分按比例压缩。公式和约束都通过 `AttributeDef` 注册；公式读取了哪个属性，就要在 `DependsOn` 中声明，才能被失效传播覆盖。
 
 ## 10. Effect、Handle 和 SourceId
 
@@ -381,17 +395,27 @@ context.RemoveEffect(sourceId);
 
 ### 11.2 新增组合策略
 
-实现 `IComposerStrategy`，可以定义不同游戏的计算顺序。例如某游戏要求：
+实现 `IComposerStrategy`，可以替换 `ModifierCalculator` 内部的组合规则。默认策略是：
 
 ```text
-基础值
-→ 装备加成
-→ Buff 加成
-→ PVP 修正
-→ 最终减半
+FinalValue = (Base + AddSum) × PercentProduct × MulProduct
 ```
 
-这比把 PVP 判断散落到每个角色属性函数里更容易维护。
+自定义策略仍然返回 `ModifierResult`，但可以改变分桶方式或桶内数值。例如 PVP 场景下把所有加法加成减半：
+
+```text
+默认：  (100 + 30) × 1.2 × 1.5 = 234
+PVP：   (100 + 30 × 0.5) × 1.2 × 1.5 = 207
+```
+
+注入方式：
+
+```csharp
+var calculator = new ModifierCalculator(new PvpAddHalfStrategy());
+var result = calculator.Calculate(modifiers, baseValue);
+```
+
+对应 `Lesson10_ComposerStrategy.cs`。注意 `AttributeInstance` 内部固定使用默认策略，目前只有直接使用 `ModifierCalculator` 时才能注入自定义策略。策略的产物仍是 `ModifierResult`，`FinalValue` 的公式固定作用于各桶；如果需要完全不同的最终公式，应换用 11.5 的 `IModifierComposer` 或直接计算。
 
 ### 11.3 新增数值来源
 
@@ -413,6 +437,43 @@ context.RemoveEffect(sourceId);
 - 自定义 Handler：项目自己的结构体或对象。
 
 这说明 Modifier 系统不是“只能加攻击力的工具”，而是一个可扩展的值变换框架。
+
+### 11.5 组合器 Chain / Parallel / Conditional
+
+`IModifierComposer` 是另一层组合 API，操作对象是 `IMagnitudeModifier`，不涉及 `ModifierData`：
+
+```text
+ChainComposer        base → m0 → m1 → ...          前一个输出作为后一个输入
+ParallelComposer     base + m0(0) + m1(0) + ...    每个修饰器从 0 计算贡献再相加
+ConditionalComposer  满足条件时选一个修饰器，否则用默认修饰器
+```
+
+例子（`Lesson11_ModifierComposer.cs`）：
+
+```text
+Chain：              100 → +10 → ×2 = 220
+Parallel（纯加法）：  100 + 10 + 5 = 115
+Parallel（含 Scale）：100 + 10 + 0×2 = 110
+Conditional：        等级 1 用 ×2 = 200，等级 3 用 ×1.5 = 150
+```
+
+`Chain` 与 `Parallel` 的区别只在修饰器是否依赖输入值：
+
+- 纯加法修饰器时两者结果相同，因为加法可结合：`Chain(100 → +10 → +5)` 也是 115。
+- 依赖输入的修饰器（如 `ScaleModifier`）才会拉开差异：`Chain` 把上一步结果传给下一步，得到 220；`Parallel` 给每个修饰器的输入都是 0，`Scale` 的贡献变成 `0 × 2 = 0`，结果是 110。
+- `TimeDecay` / `LevelCurve` / `AttributeRef` 会忽略输入值：在 `Chain` 里它们会覆盖前一步的累积值，在 `Parallel` 里则作为独立贡献加到基础值上。
+
+创建方式：
+
+```csharp
+var chain = ModifierComposerFactory.Chain(new AddMagnitudeModifier(10f), new ScaleModifier(2f));
+var parallel = ModifierComposerFactory.Parallel(new AddMagnitudeModifier(10f), new AddMagnitudeModifier(5f));
+var conditional = ModifierComposerFactory.When(ctx => ctx.Level >= 3f, new ScaleModifier(1.5f), new ScaleModifier(2f));
+```
+
+这条路径直接返回 float，不经过 `ModifierResult`、缓存或脏标记，适合技能、子弹、预览等局部数值计算，不是属性管线的一部分。
+
+注意 `ModifierPipeline` 不是 `IModifierComposer`：它本身是一个 `IMagnitudeModifier`（内部也是链式执行），Lesson04 已经把它当作 `MagnitudeSource` 的来源使用。
 
 ## 12. 一个完整战斗例子
 
@@ -457,6 +518,11 @@ Buff 到期，按 SourceId 清除 Modifier
 7. `Lesson07_Stacking.cs`：叠层和生命周期。
 8. `Lesson08_Extensions.cs`：自定义操作和 Handler。
 9. `Lesson09_ExplainAndCache.cs`：来源追踪和缓存。
+10. `Lesson10_ComposerStrategy.cs`：自定义组合策略。
+11. `Lesson11_ModifierComposer.cs`：Chain / Parallel / Conditional 组合器。
+12. `Lesson12_RegistryAndContexts.cs`：注册顺序、冻结和多 Context 隔离。
+13. `Lesson13_CustomFormulaAndConstraint.cs`：自定义公式和约束。
+14. `Lesson14_SnapshotVsLive.cs`：实时值与快照值。
 
 核心实现入口：
 

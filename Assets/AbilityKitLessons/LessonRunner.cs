@@ -20,12 +20,17 @@ namespace AttributeAndModifier.Lessons
             new Lesson06_EffectAndConstraint(),
             new Lesson07_Stacking(),
             new Lesson08_Extensions(),
-            new Lesson09_ExplainAndCache()
+            new Lesson09_ExplainAndCache(),
+            new Lesson10_ComposerStrategy(),
+            new Lesson11_ModifierComposer(),
+            new Lesson12_RegistryAndContexts(),
+            new Lesson13_CustomFormulaAndConstraint(),
+            new Lesson14_SnapshotVsLive()
         };
 
         private Vector2 _scroll;
         private string _output = "请选择一个课程。";
-        private string _purpose = "每个课程只表达一个主要设计点。建议按 01 → 09 顺序运行。";
+        private string _purpose = "每个课程只表达一个主要设计点。建议按 01 → 14 顺序运行。";
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void CreateRunnerIfNeeded()

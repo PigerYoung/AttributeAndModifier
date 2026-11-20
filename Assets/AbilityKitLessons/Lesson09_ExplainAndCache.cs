@@ -18,8 +18,10 @@ namespace AttributeAndModifier.Lessons
                 ModifierData.PercentAdd(ModifierKey.AttackPower, 0.1f, sourceId: 1002),
                 ModifierData.Mul(ModifierKey.AttackPower, 1.2f, sourceId: 1003)
             };
+            // recorder 负责记录每个修改器的具体数据
             var recorder = new DefaultRecorder();
             var calculator = new ModifierCalculator();
+            // ModifierResult 里存放的是最终结果（包括总结果和不同计算区间的结果）
             var result = calculator.Calculate(modifiers, 100f, recorder);
             var text = Line($"最终值={result.FinalValue:0.00}，AddSum={result.AddSum:0.00}，MulProduct={result.MulProduct:0.00}");
             for (var i = 0; i < recorder.Count; i++)

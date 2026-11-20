@@ -16,12 +16,30 @@ namespace AttributeAndModifier.Lessons
             context.SetBase(LessonCatalog.MoveSpeed, 8f);
             context.SetBase(LessonCatalog.CritChance, 0.2f);
 
-            var effect = new AttributeEffect(
+            // AttributeEffect 只是数据：一组“属性 + ModifierData”条目。
+            // 它不持有 Context，也不计算数值，只影响列出的属性（MoveSpeed、CritChance），
+            // 不会修改 Context 里的其它属性。条目可以跨组。
+            var effect = new AttributeEffect
+            (
                 AttributeEffect.Entry.Add(LessonCatalog.MoveSpeed, 100f),
-                AttributeEffect.Entry.Add(LessonCatalog.CritChance, 2f));
+                AttributeEffect.Entry.Add(LessonCatalog.CritChance, 2f)
+            );
+
+            // ApplyEffect = 批量 AddModifier，并给这批修改分配同一个 SourceId（用于后面整体移除）。
+            // 它只写属性槽位，不计算；真正的计算发生在下面的 GetValue：
+            //   GetValue → AttributeInstance.Recompute
+            //     → ModifierCalculator.Calculate（汇总该属性的全部活跃 Modifier）
+            //     → IAttributeFormula.Evaluate
+            //     → IAttributeConstraint.Apply
+            // 例：MoveSpeed 8 + 100 = 108，再被 Range[0,20] 约束成 20；
+            //     CritChance 0.2 + 2 = 2.2，再被 [0,1] 约束成 1。
+            //
+            // 对比：若直接 new ModifierCalculator().Calculate(new[] { Add(100) }, 8f, null)，
+            // 只会得到 108，不写入任何属性，也不会应用约束。
             var effectSourceId = context.ApplyEffect(effect);
             var boostedSpeed = context.GetValue(LessonCatalog.MoveSpeed);
             var boostedCrit = context.GetValue(LessonCatalog.CritChance);
+            // RemoveEffect 按共享 SourceId 批量移除这批修改器；下次读取时 MoveSpeed 回到基础值 8。
             context.RemoveEffect(effectSourceId);
             var restoredSpeed = context.GetValue(LessonCatalog.MoveSpeed);
 

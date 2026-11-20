@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目定位
 
-这是一个 Unity 6000.3.5f2 的 AbilityKit Attribute / Modifier "学习实验室"。工程本身几乎没有 gameplay 代码：`Assets/AbilityKitLessons/` 放的是 9 个可运行课程，框架源码以本地包的形式放在 `Packages/com.abilitykit.*` 下。这些包是可编辑源码（不是 `Library/PackageCache` 里的副本），也是主要需要修改的代码。
+这是一个 Unity 6000.3.5f2 的 AbilityKit Attribute / Modifier "学习实验室"。工程本身几乎没有 gameplay 代码：`Assets/AbilityKitLessons/` 放的是 14 个可运行课程，框架源码以本地包的形式放在 `Packages/com.abilitykit.*` 下。这些包是可编辑源码（不是 `Library/PackageCache` 里的副本），也是主要需要修改的代码。
 
 工程没有单元测试工程，也没有独立的构建工具链。验证方式是让 Unity 编译并（或）运行课程的批处理入口。
 
 ## 常用命令
 
-**交互式运行课程：** 用 Unity `6000.3.5f2` 打开工程，打开 `Assets/Scenes/SampleScene.unity`，点击 Play。`LessonRunner` 会通过 `RuntimeInitializeOnLoadMethod` 自动创建；按 01 → 09 的顺序点击课程即可。
+**交互式运行课程：** 用 Unity `6000.3.5f2` 打开工程，打开 `Assets/Scenes/SampleScene.unity`，点击 Play。`LessonRunner` 会通过 `RuntimeInitializeOnLoadMethod` 自动创建；按 01 → 14 的顺序点击课程即可。
 
 **批处理验证全部课程**（需要先关闭 Unity 编辑器，否则工程锁会阻止启动）：
 

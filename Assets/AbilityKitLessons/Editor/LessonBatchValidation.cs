@@ -24,7 +24,12 @@ namespace AttributeAndModifier.Lessons.Editor
                 new Lesson06_EffectAndConstraint(),
                 new Lesson07_Stacking(),
                 new Lesson08_Extensions(),
-                new Lesson09_ExplainAndCache()
+                new Lesson09_ExplainAndCache(),
+                new Lesson10_ComposerStrategy(),
+                new Lesson11_ModifierComposer(),
+                new Lesson12_RegistryAndContexts(),
+                new Lesson13_CustomFormulaAndConstraint(),
+                new Lesson14_SnapshotVsLive()
             };
 
             foreach (var lesson in lessons)

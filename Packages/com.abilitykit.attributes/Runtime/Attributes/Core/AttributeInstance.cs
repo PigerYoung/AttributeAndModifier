@@ -64,8 +64,11 @@ namespace AbilityKit.Attributes.Core
             {
                 ref var slot = ref _group.GetSlotRef(_rawId);
                 if (System.Math.Abs(slot.BaseValue - value) < 0.00001f) return;
+
+                // [AK-INVALIDATE] 基础值变化后失效自己和全部下游。
+                // 例子：MaxHealth 800→500 后，不读 MaxHealth，HealthFromMaxHealth 下次读取为 500。
                 slot.BaseValue = value;
-                slot.Dirty = true;
+                _ctx.Invalidate(_id);
             }
         }
 
@@ -105,7 +108,12 @@ namespace AbilityKit.Attributes.Core
             EnsureHandleMapCapacity(handle + 1);
             _handleToSlotIndex[handle] = slotIndex;
 
-            MarkDirty();
+            // [AK-INVALIDATE] 先登记再失效。
+            // Attribute(Strength, 0.5) 记下 Strength → 本属性。
+            // LevelCurve 订阅 "level"，TimeDecay 订阅 "elapsedTime"，ContextFloat 订阅它的 key。
+            // 两个 Buff 引用同一力量时计数为 2，卸光才删边。
+            _ctx.RegisterModifierDependencies(_rawId, modifierData);
+            _ctx.Invalidate(_id);
             return handle;
         }
 
@@ -134,9 +142,10 @@ namespace AbilityKit.Attributes.Core
         {
             if (handle <= 0) return false;
 
-            if (!TryDeactivateModifierSlot(handle)) return false;
+            if (!TryDeactivateModifierSlot(handle, out var modifierData)) return false;
 
-            MarkDirty();
+            _ctx.UnregisterModifierDependencies(_rawId, modifierData);
+            _ctx.Invalidate(_id);
             return true;
         }
 
@@ -148,16 +157,14 @@ namespace AbilityKit.Attributes.Core
         {
             if (!HasAnyActiveModifiers()) return;
 
-            if (sourceId == 0)
-            {
-                ClearAllModifierSlots();
-            }
-            else
-            {
-                ClearModifierSlotsBySource(sourceId);
-            }
+            int cleared = sourceId == 0
+                ? ClearAllModifierSlots()
+                : ClearModifierSlotsBySource(sourceId);
 
-            MarkDirty();
+            if (cleared > 0)
+            {
+                _ctx.Invalidate(_id);
+            }
         }
 
         /// <summary>
@@ -200,33 +207,11 @@ namespace AbilityKit.Attributes.Core
 
         #region 内部方法
 
-        private void MarkDirty()
-        {
-            ref var slot = ref _group.GetSlotRef(_rawId);
-            slot.Dirty = true;
-            _calculator.Invalidate();
-        }
-
         internal void MarkDirtyByDependency()
         {
             ref var slot = ref _group.GetSlotRef(_rawId);
             slot.Dirty = true;
             _calculator.Invalidate();
-        }
-
-        internal void MarkDirtyIfContextFloatDependent(string key)
-        {
-            for (int i = 0; i < _modifierSlotCount; i++)
-            {
-                if (!_modifierSlots[i].Active) continue;
-
-                var magnitude = _modifierSlots[i].ModifierData.Magnitude;
-                if (magnitude.Type != MagnitudeSourceType.ContextFloat) continue;
-                if (!string.Equals(magnitude.ContextFloatKey, key, StringComparison.Ordinal)) continue;
-
-                MarkDirtyByDependency();
-                return;
-            }
         }
 
         private void Recompute()
@@ -353,8 +338,9 @@ namespace AbilityKit.Attributes.Core
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool TryDeactivateModifierSlot(int handle)
+        private bool TryDeactivateModifierSlot(int handle, out ModifierData modifierData)
         {
+            modifierData = default;
             if (handle <= 0) return false;
             if (handle >= _handleToSlotIndex.Length) return false;
 
@@ -363,6 +349,7 @@ namespace AbilityKit.Attributes.Core
             if (!_modifierSlots[idx].Active) return false;
             if (_modifierSlots[idx].Handle != handle) return false;
 
+            modifierData = _modifierSlots[idx].ModifierData;
             _modifierSlots[idx].Active = false;
             _modifierSlots[idx].NextFree = _modifierFreeHead;
             _modifierFreeHead = idx;
@@ -370,11 +357,15 @@ namespace AbilityKit.Attributes.Core
             return true;
         }
 
-        private void ClearAllModifierSlots()
+        private int ClearAllModifierSlots()
         {
+            int cleared = 0;
             for (int i = 0; i < _modifierSlotCount; i++)
             {
                 if (!_modifierSlots[i].Active) continue;
+
+                _ctx.UnregisterModifierDependencies(_rawId, _modifierSlots[i].ModifierData);
+
                 _modifierSlots[i].Active = false;
                 _modifierSlots[i].NextFree = _modifierFreeHead;
                 _modifierFreeHead = i;
@@ -384,16 +375,23 @@ namespace AbilityKit.Attributes.Core
                 {
                     _handleToSlotIndex[handle] = -1;
                 }
+
+                cleared++;
             }
+
+            return cleared;
         }
 
-        private void ClearModifierSlotsBySource(int sourceId)
+        private int ClearModifierSlotsBySource(int sourceId)
         {
+            int cleared = 0;
             for (int i = 0; i < _modifierSlotCount; i++)
             {
                 if (!_modifierSlots[i].Active) continue;
                 if (_modifierSlots[i].ModifierData.SourceId != sourceId) continue;
 
+                _ctx.UnregisterModifierDependencies(_rawId, _modifierSlots[i].ModifierData);
+
                 _modifierSlots[i].Active = false;
                 _modifierSlots[i].NextFree = _modifierFreeHead;
                 _modifierFreeHead = i;
@@ -403,7 +401,11 @@ namespace AbilityKit.Attributes.Core
                 {
                     _handleToSlotIndex[handle] = -1;
                 }
+
+                cleared++;
             }
+
+            return cleared;
         }
 
         #endregion

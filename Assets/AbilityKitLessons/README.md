@@ -1,6 +1,6 @@
 # AbilityKit Attribute / Modifier 学习实验室
 
-这个目录把 AbilityKit 的 Attribute 和 Modifier 拆成由浅入深的 9 个小实验。先在 Unity 中把 `LessonRunner` 挂到 `SampleScene` 的空 GameObject 上，再点击 Play，按 01 到 09 的顺序运行。
+这个目录把 AbilityKit 的 Attribute 和 Modifier 拆成由浅入深的 14 个小实验。先在 Unity 中把 `LessonRunner` 挂到 `SampleScene` 的空 GameObject 上，再点击 Play，按 01 到 14 的顺序运行。
 
 脚本也会在场景加载后自动创建 `LessonRunner`，所以不手动挂载也可以直接 Play。
 
@@ -19,6 +19,11 @@
 | 07 | `ModifierStacking` 与按帧判断过期的 `ModifierLifecycle` |
 | 08 | `IModifierOperator`、`IModifierHandler<T>`、`CustomModifierData` |
 | 09 | `ModifierResult`、Recorder、来源贡献、缓存和 `Invalidate` |
+| 10 | `IComposerStrategy`：替换分桶和加成规则，通过 `ModifierCalculator` 注入 |
+| 11 | `IModifierComposer`：`Chain` / `Parallel` / `Conditional` 组合器 |
+| 12 | 注册顺序、`Freeze`、`AttributeId` 稳定性和多 `AttributeContext` 隔离 |
+| 13 | 自定义 `IAttributeFormula` 和 `IAttributeConstraint` |
+| 14 | 实时值（`MagnitudeSource.Attribute`）与快照值（时点捕获） |
 
 ## 对照源码
 
@@ -32,4 +37,4 @@
 
 ## 注意
 
-本课程使用 AbilityKit 仓库中的核心包，不依赖完整 MOBA Demo。MOBA 的 Buff → Continuous → Attribute 投影方式可以在理解 01 到 09 后，再加入 `com.abilitykit.continuous` 和 `com.abilitykit.demo.moba.runtime` 学习。
+本课程使用 AbilityKit 仓库中的核心包，不依赖完整 MOBA Demo。MOBA 的 Buff → Continuous → Attribute 投影方式可以在理解 01 到 14 后，再加入 `com.abilitykit.continuous` 和 `com.abilitykit.demo.moba.runtime` 学习。
